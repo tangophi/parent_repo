@@ -1,0 +1,6 @@
+[submodule "source/sub1"]
+	path = source/sub1
+	url = https://github.com/tangophi/sub1.git
+[submodule "source/sub2"]
+	path = source/sub2
+	url = https://github.com/tangophi/sub2.git
