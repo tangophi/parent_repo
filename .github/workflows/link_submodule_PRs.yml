@@ -19,24 +19,23 @@ jobs:
           submodules: true
           fetch-depth: 0
 
-      - name: Install GitHub CLI
-        run: sudo apt-get install -y gh
+      - name: Install GitHub CLI and jq
+        run: sudo apt-get update && sudo apt-get install -y gh jq
 
-      - name: Get submodule SHAs
-        id: shas
+      - name: Link PRs both ways
+        id: linkprs
         run: |
-          for sub in sub1 sub2; do
-            sha=$(git ls-tree HEAD "$sub" | awk '{print $3}')
-            echo "$sub=$sha" >> $GITHUB_OUTPUT
-          done
+          set -e
 
-      - name: Find matching PRs in submodules
-        id: findprs
-        run: |
+          repo_pdr="${{ github.repository }}"
+          pr_number="${{ github.event.pull_request.number }}"
+          pdr_pr_url="https://github.com/$repo_pdr/pull/$pr_number"
+
           links=""
           prs_json="[]"
+
           for sub in sub1 sub2; do
-            sha=${{ steps.shas.outputs[$sub] }}
+            sha=$(git ls-tree HEAD "$sub" | awk '{print $3}')
             if [ -n "$sha" ]; then
               pr_num=$(gh pr list \
                 --repo tangophi/$sub \
@@ -47,11 +46,11 @@ jobs:
               if [ -n "$pr_num" ]; then
                 pr_url="https://github.com/tangophi/$sub/pull/$pr_num"
                 links="$links"$'\n'"Linked $sub PR: $pr_url"
-                # Store PR info as JSON array of objects
                 prs_json=$(echo "$prs_json" | jq --arg sub "$sub" --arg num "$pr_num" '. += [{"sub":$sub,"num":$num}]')
               fi
             fi
           done
+
           echo "links<<EOF" >> $GITHUB_OUTPUT
           echo "$links" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
@@ -60,12 +59,12 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
 
       - name: Update PDR PR body with submodule PR links
-        if: steps.findprs.outputs.links != ''
+        if: steps.linkprs.outputs.links != ''
         run: |
           current_body=$(gh pr view ${{ github.event.pull_request.number }} \
                           --repo ${{ github.repository }} \
                           --json body --jq '.body')
-          new_links="${{ steps.findprs.outputs.links }}"
+          new_links="${{ steps.linkprs.outputs.links }}"
           if [[ "$current_body" != *"$new_links"* ]]; then
             updated_body="$current_body"$'\n\n'"$new_links"
             gh pr edit ${{ github.event.pull_request.number }} \
@@ -76,12 +75,12 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
 
       - name: Update submodule PRs with PDR PR link
-        if: steps.findprs.outputs.prs_json != '[]'
+        if: steps.linkprs.outputs.prs_json != '[]'
         run: |
           pdr_pr_url="https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
           echo "Updating submodule PRs with link to: $pdr_pr_url"
 
-          echo '${{ steps.findprs.outputs.prs_json }}' | jq -c '.[]' | while read pr_info; do
+          echo '${{ steps.linkprs.outputs.prs_json }}' | jq -c '.[]' | while read pr_info; do
             sub=$(echo "$pr_info" | jq -r '.sub')
             num=$(echo "$pr_info" | jq -r '.num')
             current_body=$(gh pr view "$num" \
