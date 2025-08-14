@@ -1,101 +1,58 @@
-name: Link PDR and Submodule PRs
+name: Link Submodule PRs
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
-
-permissions:
-  contents: read
-  pull-requests: write
+    types: [opened, reopened, synchronize]
 
 jobs:
   link-prs:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
 
     steps:
-      - name: Checkout PDR PR
-        uses: actions/checkout@v4
+      - name: Extract branch name
+        id: branch
+        run: echo "branch_name=${GITHUB_HEAD_REF}" >> $GITHUB_OUTPUT
+
+      - name: Link submodule PRs to PDR PR
+        uses: actions/github-script@v7
         with:
-          submodules: true
-          fetch-depth: 0
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const branch = "${{ steps.branch.outputs.branch_name }}";
+            const pdrPR = context.payload.pull_request;
 
-      - name: Install GitHub CLI
-        run: sudo apt-get install -y gh
+            const submodules = ["sub1", "sub2"];
+            for (const sub of submodules) {
+              const { data: prs } = await github.pulls.list({
+                owner: "tangophi",
+                repo: sub,
+                state: "open",
+                head: `tangophi:${branch}`
+              });
 
-      - name: Get submodule SHAs
-        id: shas
-        run: |
-          for sub in sub1 sub2; do
-            sha=$(git ls-tree HEAD "$sub" | awk '{print $3}')
-            echo "$sub=$sha" >> $GITHUB_OUTPUT
-          done
+              if (prs.length > 0) {
+                const subPR = prs[0];
+                // Update PDR PR body
+                const linkLine = `Linked Submodule PR: [${sub}#${subPR.number}](${subPR.html_url})`;
+                const newBody = (pdrPR.body || "") + "\n" + linkLine;
+                await github.pulls.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: pdrPR.number,
+                  body: newBody
+                });
 
-      - name: Find matching PRs in submodules
-        id: findprs
-        run: |
-          links=""
-          prs_json="[]"
-          for sub in sub1 sub2; do
-            sha=${{ steps.shas.outputs[$sub] }}
-            if [ -n "$sha" ]; then
-              pr_num=$(gh pr list \
-                --repo tangophi/$sub \
-                --state open \
-                --json number,headSha \
-                --jq ".[] | select(.headSha==\"$sha\") | .number" \
-                || true)
-              if [ -n "$pr_num" ]; then
-                pr_url="https://github.com/tangophi/$sub/pull/$pr_num"
-                links="$links"$'\n'"Linked $sub PR: $pr_url"
-                # Store PR info as JSON array of objects
-                prs_json=$(echo "$prs_json" | jq --arg sub "$sub" --arg num "$pr_num" '. += [{"sub":$sub,"num":$num}]')
-              fi
-            fi
-          done
-          echo "links<<EOF" >> $GITHUB_OUTPUT
-          echo "$links" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-          echo "prs_json=$prs_json" >> $GITHUB_OUTPUT
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-
-      - name: Update PDR PR body with submodule PR links
-        if: steps.findprs.outputs.links != ''
-        run: |
-          current_body=$(gh pr view ${{ github.event.pull_request.number }} \
-                          --repo ${{ github.repository }} \
-                          --json body --jq '.body')
-          new_links="${{ steps.findprs.outputs.links }}"
-          if [[ "$current_body" != *"$new_links"* ]]; then
-            updated_body="$current_body"$'\n\n'"$new_links"
-            gh pr edit ${{ github.event.pull_request.number }} \
-                       --repo ${{ github.repository }} \
-                       --body "$updated_body"
-          fi
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-
-      - name: Update submodule PRs with PDR PR link
-        if: steps.findprs.outputs.prs_json != '[]'
-        run: |
-          pdr_pr_url="https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
-          echo "Updating submodule PRs with link to: $pdr_pr_url"
-
-          echo '${{ steps.findprs.outputs.prs_json }}' | jq -c '.[]' | while read pr_info; do
-            sub=$(echo "$pr_info" | jq -r '.sub')
-            num=$(echo "$pr_info" | jq -r '.num')
-            current_body=$(gh pr view "$num" \
-                            --repo tangophi/$sub \
-                            --json body --jq '.body')
-            if [[ "$current_body" != *"$pdr_pr_url"* ]]; then
-              updated_body="$current_body"$'\n\n'"Linked PDR PR: $pdr_pr_url"
-              gh pr edit "$num" \
-                         --repo tangophi/$sub \
-                         --body "$updated_body"
-              echo "Updated $sub PR #$num"
-            else
-              echo "$sub PR #$num already has link"
-            fi
-          done
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+                // Update submodule PR body with link to PDR
+                const pdrLinkLine = `Linked PDR PR: [${context.repo.repo}#${pdrPR.number}](${pdrPR.html_url})`;
+                const newSubBody = (subPR.body || "") + "\n" + pdrLinkLine;
+                await github.pulls.update({
+                  owner: "tangophi",
+                  repo: sub,
+                  pull_number: subPR.number,
+                  body: newSubBody
+                });
+              }
+            }
