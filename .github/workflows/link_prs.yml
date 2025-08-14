@@ -1,0 +1,80 @@
+name: Link Submodule PRs
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  schedule:
+    - cron: '*/15 * * * *'
+
+jobs:
+  link-prs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Link Submodule PRs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PDR_REPO: ${{ github.repository }}
+          SUBMODULE_REPOS: "tangophi/sub1,tangophi/sub2"
+        run: |
+          # Function to get PRs from a repo by branch name
+          get_pr_url() {
+            repo=$1
+            branch=$2
+            pr_url=$(gh pr list -R "$repo" --head "$branch" --json url -q '.[0].url')
+            echo "$pr_url"
+          }
+
+          # Function to update PR description
+          update_pr_description() {
+            pr_number=$1
+            pr_body=$2
+            new_links=$3
+            existing_links=$(echo "$pr_body" | grep -o "https://github.com/.*")
+            all_links="$existing_links\n$new_links"
+            unique_links=$(echo -e "$all_links" | sort -u | sed '/^$/d')
+
+            if [ "$existing_links" != "$unique_links" ]; then
+              new_body="$pr_body\n\n**Related PRs:**\n$unique_links"
+              gh pr edit "$pr_number" -R "$PDR_REPO" --body "$new_body"
+            fi
+          }
+
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            pr_number=${{ github.event.pull_request.number }}
+            pr_body="${{ github.event.pull_request.body }}"
+            branch=${{ github.event.pull_request.head.ref }}
+            
+            submodule_links=""
+            for submodule in $(echo $SUBMODULE_REPOS | sed "s/,/ /g"); do
+              submodule_pr_url=$(get_pr_url "$submodule" "$branch")
+              if [ -n "$submodule_pr_url" ]; then
+                submodule_links="$submodule_links\n$submodule_pr_url"
+              fi
+            done
+
+            if [ -n "$submodule_links" ]; then
+              update_pr_description "$pr_number" "$pr_body" "$submodule_links"
+            fi
+          else # schedule
+            prs=$(gh pr list -R "$PDR_REPO" --json number,body,headRefName)
+            echo "$prs" | while IFS= read -r pr; do
+              pr_number=$(echo "$pr" | jq -r '.number')
+              pr_body=$(echo "$pr" | jq -r '.body')
+              branch=$(echo "$pr" | jq -r '.headRefName')
+
+              submodule_links=""
+              for submodule in $(echo $SUBMODULE_REPOS | sed "s/,/ /g"); do
+                submodule_pr_url=$(get_pr_url "$submodule" "$branch")
+                if [ -n "$submodule_pr_url" ]; then
+                  submodule_links="$submodule_links\n$submodule_pr_url"
+                fi
+              done
+
+              if [ -n "$submodule_links" ]; then
+                update_pr_description "$pr_number" "$pr_body" "$submodule_links"
+              fi
+            done
+          fi
