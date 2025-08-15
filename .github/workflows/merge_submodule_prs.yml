@@ -5,44 +5,87 @@ on:
     types: [closed]
 
 jobs:
-  merge-submodule-prs:
+  extract-prs:
     runs-on: ubuntu-latest
     if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
+    outputs:
+      sub1_prs: ${{ steps.extract.outputs.sub1_prs }}
+      sub2_prs: ${{ steps.extract.outputs.sub2_prs }}
+      branch: ${{ steps.extract.outputs.branch }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Extract and Merge Submodule PRs
+      - name: Extract PR numbers and branch
+        id: extract
         env:
-          GITHUB_TOKEN: ${{ secrets.MY_PAT }}
           PR_BODY: ${{ github.event.pull_request.body }}
           OWNER: tangophi
         run: |
-          echo "PR body is: $PR_BODY"
+          echo "Extracting PR numbers from body:"
+          echo "$PR_BODY"
+          SUB1_PRS=$(echo "$PR_BODY" | grep -o "https://github.com/$OWNER/sub1/pull/[0-9]*" | awk -F'/' '{print $NF}' | jq -R . | jq -s -c .)
+          SUB2_PRS=$(echo "$PR_BODY" | grep -o "https://github.com/$OWNER/sub2/pull/[0-9]*" | awk -F'/' '{print $NF}' | jq -R . | jq -s -c .)
+          echo "::set-output name=sub1_prs::$SUB1_PRS"
+          echo "::set-output name=sub2_prs::$SUB2_PRS"
+          echo "::set-output name=branch::${{ github.event.pull_request.head.ref }}"
 
-          # Extract sub1 PR numbers
-          SUB1_PRS=$(echo "$PR_BODY" | grep -o "https://github.com/$OWNER/sub1/pull/[0-9]*" | awk -F'/' '{print $NF}')
+  merge-sub1-prs:
+    needs: extract-prs
+    if: needs.extract-prs.outputs.sub1_prs != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        pr_number: ${{ fromJson(needs.extract-prs.outputs.sub1_prs) }}
+    steps:
+      - name: Merge sub1 PR #${{ matrix.pr_number }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.MY_PAT }}
+          OWNER: tangophi
+        run: |
+          echo "Merging sub1 PR #${{ matrix.pr_number }}"
+          curl -X PUT \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/$OWNER/sub1/pulls/${{ matrix.pr_number }}/merge"
 
-          # Extract sub2 PR numbers
-          SUB2_PRS=$(echo "$PR_BODY" | grep -o "https://github.com/$OWNER/sub2/pull/[0-9]*" | awk -F'/' '{print $NF}')
+  handle-sub2-prs:
+    needs: extract-prs
+    if: needs.extract-prs.outputs.sub2_prs != '[]'
+    uses: ./.github/workflows/handle_sub2_patch.yml
+    secrets:
+      token: ${{ secrets.MY_PAT }}
+    with:
+      pr_number: ${{ matrix.pr_number }}
+      branch_name: ${{ needs.extract-prs.outputs.branch }}
+    strategy:
+      matrix:
+        pr_number: ${{ fromJson(needs.extract-prs.outputs.sub2_prs) }}
 
-          if [ -z "$SUB1_PRS" ] && [ -z "$SUB2_PRS" ]; then
-            echo "No submodule PRs found in the PDR body."
+  update-parent-repo:
+    needs: [merge-sub1-prs, handle-sub2-prs]
+    if: always() && (needs.merge-sub1-prs.result == 'success' || needs.handle-sub2-prs.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout parent repository
+        uses: actions/checkout@v3
+        with:
+          ref: main
+          token: ${{ secrets.MY_PAT }}
+          submodules: 'recursive'
+
+      - name: Update submodules to latest commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Update submodules to the latest commit on their respective branches
+          # This will update sub2 to the commit with the patch.
+          git submodule update --remote --merge
+
+          # See if there are any changes to commit
+          if git diff --quiet --exit-code; then
+            echo "No submodule changes to commit."
             exit 0
           fi
 
-          for pr in $SUB1_PRS; do
-            echo "Merging sub1 PR #$pr"
-            curl -X PUT \
-              -H "Authorization: token $GITHUB_TOKEN" \
-              -H "Accept: application/vnd.github.v3+json" \
-              "https://api.github.com/repos/$OWNER/sub1/pulls/$pr/merge"
-          done
-
-          for pr in $SUB2_PRS; do
-            echo "Merging sub2 PR #$pr"
-            curl -X PUT \
-              -H "Authorization: token $GITHUB_TOKEN" \
-              -H "Accept: application/vnd.github.v3+json" \
-              "https://api.github.com/repos/$OWNER/sub2/pulls/$pr/merge"
-          done
+          git add .
+          git commit -m "Update submodules to latest"
+          git push origin main
