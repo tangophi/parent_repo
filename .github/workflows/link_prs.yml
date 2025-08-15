@@ -3,80 +3,63 @@ name: Link Submodule PRs
 on:
   pull_request:
     types: [opened, reopened, synchronize]
-  schedule:
-    - cron: '*/15 * * * *'
 
 jobs:
   link-prs:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: Extract branch name
+        id: branch
+        run: echo "branch_name=${GITHUB_HEAD_REF}" >> $GITHUB_OUTPUT
 
-      - name: Link Submodule PRs
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PDR_REPO: ${{ github.repository }}
-          SUBMODULE_REPOS: "tangophi/sub1,tangophi/sub2"
-        run: |
-          # Function to get PRs from a repo by branch name
-          get_pr_url() {
-            repo=$1
-            branch=$2
-            pr_url=$(gh pr list -R "$repo" --head "$branch" --json url -q '.[0].url')
-            echo "$pr_url"
-          }
+      - name: Link submodule PRs to PDR PR
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const branch = "${{ steps.branch.outputs.branch_name }}";
+            console.log(`Branch: ${branch}`);
+            const pdrPR = context.payload.pull_request;
+            console.log(`PDR PR: #${pdrPR.number}`);
 
-          # Function to update PR description
-          update_pr_description() {
-            pr_number=$1
-            pr_body=$2
-            new_links=$3
-            existing_links=$(echo "$pr_body" | grep -o "https://github.com/.*")
-            all_links="$existing_links\n$new_links"
-            unique_links=$(echo -e "$all_links" | sort -u | sed '/^$/d')
+            const submodules = ["sub1", "sub2"];
+            for (const sub of submodules) {
+              console.log(`Processing submodule: ${sub}`);
+              const { data: prs } = await github.rest.pulls.list({
+                owner: "tangophi",
+                repo: sub,
+                state: "open",
+                head: `tangophi:${branch}`
+              });
+              console.log(`Found ${prs.length} PRs for ${sub}`);
 
-            if [ "$existing_links" != "$unique_links" ]; then
-              new_body="$pr_body\n\n**Related PRs:**\n$unique_links"
-              gh pr edit "$pr_number" -R "$PDR_REPO" --body "$new_body"
-            fi
-          }
+              if (prs.length > 0) {
+                const subPR = prs[0];
+                console.log(`Found submodule PR: #${subPR.number}`);
+                // Update PDR PR body
+                const linkLine = `Linked Submodule PR: [${sub}#${subPR.number}](${subPR.html_url})`;
+                const newBody = (pdrPR.body || "") + "\n" + linkLine;
+                console.log(`New PDR PR body: ${newBody}`);
+                await github.rest.pulls.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: pdrPR.number,
+                  body: newBody
+                });
 
-          if [ "${{ github.event_name }}" == "pull_request" ]; then
-            pr_number=${{ github.event.pull_request.number }}
-            pr_body="${{ github.event.pull_request.body }}"
-            branch=${{ github.event.pull_request.head.ref }}
-            
-            submodule_links=""
-            for submodule in $(echo $SUBMODULE_REPOS | sed "s/,/ /g"); do
-              submodule_pr_url=$(get_pr_url "$submodule" "$branch")
-              if [ -n "$submodule_pr_url" ]; then
-                submodule_links="$submodule_links\n$submodule_pr_url"
-              fi
-            done
-
-            if [ -n "$submodule_links" ]; then
-              update_pr_description "$pr_number" "$pr_body" "$submodule_links"
-            fi
-          else # schedule
-            prs=$(gh pr list -R "$PDR_REPO" --json number,body,headRefName)
-            echo "$prs" | while IFS= read -r pr; do
-              pr_number=$(echo "$pr" | jq -r '.number')
-              pr_body=$(echo "$pr" | jq -r '.body')
-              branch=$(echo "$pr" | jq -r '.headRefName')
-
-              submodule_links=""
-              for submodule in $(echo $SUBMODULE_REPOS | sed "s/,/ /g"); do
-                submodule_pr_url=$(get_pr_url "$submodule" "$branch")
-                if [ -n "$submodule_pr_url" ]; then
-                  submodule_links="$submodule_links\n$submodule_pr_url"
-                fi
-              done
-
-              if [ -n "$submodule_links" ]; then
-                update_pr_description "$pr_number" "$pr_body" "$submodule_links"
-              fi
-            done
-          fi
-
-
+                // Update submodule PR body with link to PDR
+                const pdrLinkLine = `Linked PDR PR: [${context.repo.repo}#${pdrPR.number}](${pdrPR.html_url})`;
+                const newSubBody = (subPR.body || "") + "\n" + pdrLinkLine;
+                console.log(`New submodule PR body: ${newSubBody}`);
+                await github.rest.pulls.update({
+                  owner: "tangophi",
+                  repo: sub,
+                  pull_number: subPR.number,
+                  body: newSubBody
+                });
+              }
+            }
