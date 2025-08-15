@@ -1,0 +1,48 @@
+name: Merge Submodule PRs
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  merge-submodule-prs:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Extract and Merge Submodule PRs
+        env:
+          GITHUB_TOKEN: ${{ secrets.MY_PAT }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          OWNER: tangophi
+        run: |
+          echo "PR body is: $PR_BODY"
+
+          # Extract sub1 PR numbers
+          SUB1_PRS=$(echo "$PR_BODY" | grep -o "https://github.com/$OWNER/sub1/pull/[0-9]*" | awk -F'/' '{print $NF}')
+
+          # Extract sub2 PR numbers
+          SUB2_PRS=$(echo "$PR_BODY" | grep -o "https://github.com/$OWNER/sub2/pull/[0-9]*" | awk -F'/' '{print $NF}')
+
+          if [ -z "$SUB1_PRS" ] && [ -z "$SUB2_PRS" ]; then
+            echo "No submodule PRs found in the PDR body."
+            exit 0
+          fi
+
+          for pr in $SUB1_PRS; do
+            echo "Merging sub1 PR #$pr"
+            curl -X PUT \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/$OWNER/sub1/pulls/$pr/merge"
+          done
+
+          for pr in $SUB2_PRS; do
+            echo "Merging sub2 PR #$pr"
+            curl -X PUT \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/$OWNER/sub2/pulls/$pr/merge"
+          done
