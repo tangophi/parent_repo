@@ -19,26 +19,32 @@ jobs:
       - name: Link submodule PRs to PDR PR
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.MY_PAT }}
           script: |
             const branch = "${{ steps.branch.outputs.branch_name }}";
+            console.log(`Branch: ${branch}`);
             const pdrPR = context.payload.pull_request;
+            console.log(`PDR PR: #${pdrPR.number}`);
 
             const submodules = ["sub1", "sub2"];
             for (const sub of submodules) {
-              const { data: prs } = await github.pulls.list({
+              console.log(`Processing submodule: ${sub}`);
+              const { data: prs } = await github.rest.pulls.list({
                 owner: "tangophi",
                 repo: sub,
                 state: "open",
                 head: `tangophi:${branch}`
               });
+              console.log(`Found ${prs.length} PRs for ${sub}`);
 
               if (prs.length > 0) {
                 const subPR = prs[0];
+                console.log(`Found submodule PR: #${subPR.number}`);
                 // Update PDR PR body
                 const linkLine = `Linked Submodule PR: [${sub}#${subPR.number}](${subPR.html_url})`;
                 const newBody = (pdrPR.body || "") + "\n" + linkLine;
-                await github.pulls.update({
+                console.log(`New PDR PR body: ${newBody}`);
+                await github.rest.pulls.update({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   pull_number: pdrPR.number,
@@ -48,7 +54,8 @@ jobs:
                 // Update submodule PR body with link to PDR
                 const pdrLinkLine = `Linked PDR PR: [${context.repo.repo}#${pdrPR.number}](${pdrPR.html_url})`;
                 const newSubBody = (subPR.body || "") + "\n" + pdrLinkLine;
-                await github.pulls.update({
+                console.log(`New submodule PR body: ${newSubBody}`);
+                await github.rest.pulls.update({
                   owner: "tangophi",
                   repo: sub,
                   pull_number: subPR.number,
