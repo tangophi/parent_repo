@@ -27,6 +27,8 @@ jobs:
             console.log(`PDR PR: #${pdrPR.number}`);
 
             const submodules = ["sub1", "sub2"];
+            let pdrBodyUpdate = "";
+
             for (const sub of submodules) {
               console.log(`Processing submodule: ${sub}`);
               const { data: prs } = await github.rest.pulls.list({
@@ -40,16 +42,10 @@ jobs:
               if (prs.length > 0) {
                 const subPR = prs[0];
                 console.log(`Found submodule PR: #${subPR.number}`);
-                // Update PDR PR body
+
+                // Append link for the PDR body update
                 const linkLine = `Linked Submodule PR: [${sub}#${subPR.number}](${subPR.html_url})`;
-                const newBody = (pdrPR.body || "") + "\n" + linkLine;
-                console.log(`New PDR PR body: ${newBody}`);
-                await github.rest.pulls.update({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  pull_number: pdrPR.number,
-                  body: newBody
-                });
+                pdrBodyUpdate += `\n${linkLine}`;
 
                 // Update submodule PR body with link to PDR
                 const pdrLinkLine = `Linked PDR PR: [${context.repo.repo}#${pdrPR.number}](${pdrPR.html_url})`;
@@ -62,4 +58,16 @@ jobs:
                   body: newSubBody
                 });
               }
+            }
+
+            // After the loop, update the PDR body if there are any new links
+            if (pdrBodyUpdate) {
+              const newBody = (pdrPR.body || "") + pdrBodyUpdate;
+              console.log(`Final PDR PR body: ${newBody}`);
+              await github.rest.pulls.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pdrPR.number,
+                body: newBody
+              });
             }
