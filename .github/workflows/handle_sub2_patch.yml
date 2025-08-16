@@ -94,21 +94,26 @@ jobs:
           git fetch origin main
           git reset --hard origin/main
 
-          LATEST_PATCH=$(ls *.patch 2>/dev/null | grep -E '^[0-9]{4}-' | sort -r | head -n 1)
+          # Create patches directory if it doesn't exist
+          mkdir -p patches
+
+          LATEST_PATCH=$(ls patches/*.patch 2>/dev/null | grep -E '[0-9]{4}-' | sort -r | head -n 1)
           if [ -z "$LATEST_PATCH" ]; then
             NEXT_NUM=1
           else
-            NEXT_NUM=$((10#$(echo "$LATEST_PATCH" | cut -d'-' -f1) + 1))
+            LATEST_NUM_STR=$(basename "$LATEST_PATCH" | cut -d'-' -f1)
+            NEXT_NUM=$((10#$LATEST_NUM_STR + 1))
           fi
           PREFIX=$(printf "%04d" $NEXT_NUM)
 
           PATCH_NAME="${PREFIX}-patch-from-pr-${PR_NUMBER}.patch"
-          echo "Creating patch: $PATCH_NAME"
+          FULL_PATCH_PATH="patches/$PATCH_NAME"
+          echo "Creating patch: $FULL_PATCH_PATH"
 
-          # Create patch from the commits in the PR
-          git format-patch $BASE_SHA..$HEAD_SHA --stdout -- . ':(exclude)build' ':(exclude)bpdr_build' > "$PATCH_NAME"
+          # Create patch from the commits in the PR, excluding specified directories
+          git format-patch $BASE_SHA..$HEAD_SHA --stdout -- . ':(exclude)build' ':(exclude)bpdr_build' ':(exclude)patches' > "$FULL_PATCH_PATH"
 
-          if [ ! -s "$PATCH_NAME" ]; then
+          if [ ! -s "$FULL_PATCH_PATH" ]; then
             echo "No patch created. This might be because the changes were only in excluded directories."
             # Set output to current HEAD and exit gracefully
             CURRENT_SHA=$(git rev-parse HEAD)
@@ -116,7 +121,7 @@ jobs:
             exit 0
           fi
 
-          git add "$PATCH_NAME"
+          git add "$FULL_PATCH_PATH"
           git commit -m "Create patch for PR #${PR_NUMBER}"
           git push origin main
 
