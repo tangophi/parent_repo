@@ -70,15 +70,18 @@ jobs:
           ref: main
           token: ${{ secrets.MY_PAT }}
           submodules: 'recursive'
+          submodule-fetch-depth: 0
 
       - name: Update submodules to latest commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Update submodules to the latest commit on their respective branches
-          # This will update sub2 to the commit with the patch.
-          git submodule update --remote --merge
+          echo "Updating sub1 to the latest on main..."
+          (cd source/sub1 && git checkout main && git pull)
+
+          echo "Updating sub2 to the latest on main..."
+          (cd source/sub2 && git checkout main && git pull)
 
           # See if there are any changes to commit
           if git diff --quiet --exit-code; then
@@ -86,6 +89,7 @@ jobs:
             exit 0
           fi
 
-          git add .
+          echo "Committing submodule updates..."
+          git add source/sub1 source/sub2
           git commit -m "Update submodules to latest"
           git push origin main
