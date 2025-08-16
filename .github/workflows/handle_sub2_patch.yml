@@ -77,6 +77,7 @@ jobs:
           ref: main
           token: ${{ secrets.token }}
           path: sub2
+          fetch-depth: 0
 
       - name: Create and Commit Patch
         id: commit_patch
