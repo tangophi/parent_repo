@@ -1,0 +1,130 @@
+name: Handle sub2 Patch
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        required: true
+        type: string
+      branch_name:
+        required: true
+        type: string
+    secrets:
+      token:
+        required: true
+    outputs:
+      new_commit_sha:
+        description: "The new commit SHA in sub2 after creating the patch."
+        value: ${{ jobs.handle-patch.outputs.new_commit_sha }}
+
+jobs:
+  handle-patch:
+    runs-on: ubuntu-latest
+    outputs:
+      new_commit_sha: ${{ steps.commit_patch.outputs.new_commit_sha }}
+    steps:
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
+      - name: Get PR Info
+        id: pr_info
+        env:
+          GITHUB_TOKEN: ${{ secrets.token }}
+          OWNER: tangophi
+          REPO: sub2
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          PR_DATA=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+            "https://api.github.com/repos/$OWNER/$REPO/pulls/$PR_NUMBER")
+          BASE_SHA=$(echo "$PR_DATA" | jq -r '.base.sha')
+          HEAD_SHA=$(echo "$PR_DATA" | jq -r '.head.sha')
+          echo "BASE_SHA=$BASE_SHA" >> $GITHUB_ENV
+          echo "HEAD_SHA=$HEAD_SHA" >> $GITHUB_ENV
+          echo "Base SHA: $BASE_SHA"
+          echo "Head SHA: $HEAD_SHA"
+
+      - name: Merge sub2 PR
+        id: merge_pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.token }}
+          OWNER: tangophi
+          REPO: sub2
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          echo "Merging PR #$PR_NUMBER in $OWNER/$REPO"
+          MERGE_DATA=$(curl -s -X PUT \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/$OWNER/$REPO/pulls/$PR_NUMBER/merge")
+          MERGE_COMMIT_SHA=$(echo "$MERGE_DATA" | jq -r '.sha')
+          if [ "$MERGE_COMMIT_SHA" == "null" ]; then
+            echo "Failed to merge PR:"
+            echo "$MERGE_DATA"
+            # Check if already merged
+            if echo "$MERGE_DATA" | grep -q "Pull Request is not mergeable"; then
+              echo "PR might already be merged or not mergeable."
+              # We can try to proceed assuming it was merged, but for now, let's fail.
+              exit 1
+            fi
+          fi
+          echo "Merge commit SHA: $MERGE_COMMIT_SHA"
+          echo "MERGE_COMMIT_SHA=$MERGE_COMMIT_SHA" >> $GITHUB_ENV
+
+      - name: Checkout sub2 repository
+        uses: actions/checkout@v3
+        with:
+          repository: tangophi/sub2
+          ref: main
+          token: ${{ secrets.token }}
+          path: sub2
+
+      - name: Create and Commit Patch
+        id: commit_patch
+        working-directory: ./sub2
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          BASE_SHA: ${{ env.BASE_SHA }}
+          HEAD_SHA: ${{ env.HEAD_SHA }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # The PR has been merged, so the main branch is updated.
+          # We need to be on the latest version of main.
+          git fetch origin main
+          git reset --hard origin/main
+
+          # Create patches directory if it doesn't exist
+          mkdir -p patches
+
+          LATEST_PATCH=$(ls patches/*.patch 2>/dev/null | grep -E '[0-9]{4}-' | sort -r | head -n 1)
+          if [ -z "$LATEST_PATCH" ]; then
+            NEXT_NUM=1
+          else
+            LATEST_NUM_STR=$(basename "$LATEST_PATCH" | cut -d'-' -f1)
+            NEXT_NUM=$((10#$LATEST_NUM_STR + 1))
+          fi
+          PREFIX=$(printf "%04d" $NEXT_NUM)
+
+          PATCH_NAME="${PREFIX}-patch-from-pr-${PR_NUMBER}.patch"
+          FULL_PATCH_PATH="patches/$PATCH_NAME"
+          echo "Creating patch: $FULL_PATCH_PATH"
+
+          # Create patch from the commits in the PR, excluding specified directories
+          git format-patch $BASE_SHA..$HEAD_SHA --stdout -- . ':(exclude)build' ':(exclude)bpdr_build' ':(exclude)patches' > "$FULL_PATCH_PATH"
+
+          if [ ! -s "$FULL_PATCH_PATH" ]; then
+            echo "No patch created. This might be because the changes were only in excluded directories."
+            # Set output to current HEAD and exit gracefully
+            CURRENT_SHA=$(git rev-parse HEAD)
+            echo "::set-output name=new_commit_sha::$CURRENT_SHA"
+            exit 0
+          fi
+
+          git add "$FULL_PATCH_PATH"
+          git commit -m "Create patch for PR #${PR_NUMBER}"
+          git push origin main
+
+          NEW_COMMIT_SHA=$(git rev-parse HEAD)
+          echo "New commit SHA: $NEW_COMMIT_SHA"
+          echo "::set-output name=new_commit_sha::$NEW_COMMIT_SHA"
