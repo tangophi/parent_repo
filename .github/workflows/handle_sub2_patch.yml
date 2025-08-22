@@ -74,7 +74,7 @@ jobs:
         uses: actions/checkout@v3
         with:
           repository: tangophi/sub2
-          ref: main
+          ref: ${{ inputs.branch_name }}
           token: ${{ secrets.token }}
           path: sub2
           fetch-depth: 0
@@ -90,10 +90,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # The PR has been merged, so the main branch is updated.
-          # We need to be on the latest version of main.
-          git fetch origin main
-          git reset --hard origin/main
+          # The PR has been merged, so the branch is updated.
+          # We need to be on the latest version of the branch.
+          git fetch origin ${{ inputs.branch_name }}
+          git reset --hard origin/${{ inputs.branch_name }}
 
           # Make the script executable
           chmod +x ./bpdr_build/create_patches.sh
@@ -114,7 +114,7 @@ jobs:
           # Add, commit, and push the new patch files
           git add patches/*.patch
           git commit -m "Create patches for PR #${PR_NUMBER}"
-          git push origin main
+          git push origin ${{ inputs.branch_name }}
 
           NEW_COMMIT_SHA=$(git rev-parse HEAD)
           echo "New commit SHA: $NEW_COMMIT_SHA"
