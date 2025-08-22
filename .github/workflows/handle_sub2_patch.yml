@@ -95,6 +95,9 @@ jobs:
           git fetch origin main
           git reset --hard origin/main
 
+          # Make the script executable
+          chmod +x ./bpdr_build/create_patches.sh
+
           # Run the script to create the patches
           # The script will read the git log and create patches in the 'patches' directory.
           ./bpdr_build/create_patches.sh
