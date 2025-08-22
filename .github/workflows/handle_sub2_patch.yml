@@ -95,35 +95,22 @@ jobs:
           git fetch origin main
           git reset --hard origin/main
 
-          # Create patches directory if it doesn't exist
-          mkdir -p patches
+          # Run the script to create the patches
+          # The script will read the git log and create patches in the 'patches' directory.
+          ./bpdr_build/create_patches.sh
 
-          LATEST_PATCH=$(ls patches/*.patch 2>/dev/null | grep -E '[0-9]{4}-' | sort -r | head -n 1)
-          if [ -z "$LATEST_PATCH" ]; then
-            NEXT_NUM=1
-          else
-            LATEST_NUM_STR=$(basename "$LATEST_PATCH" | cut -d'-' -f1)
-            NEXT_NUM=$((10#$LATEST_NUM_STR + 1))
-          fi
-          PREFIX=$(printf "%04d" $NEXT_NUM)
-
-          PATCH_NAME="${PREFIX}-patch-from-pr-${PR_NUMBER}.patch"
-          FULL_PATCH_PATH="patches/$PATCH_NAME"
-          echo "Creating patch: $FULL_PATCH_PATH"
-
-          # Create patch from the commits in the PR, excluding specified directories
-          git format-patch $BASE_SHA..$HEAD_SHA --stdout -- . ':(exclude)build' ':(exclude)bpdr_build' ':(exclude)patches' > "$FULL_PATCH_PATH"
-
-          if [ ! -s "$FULL_PATCH_PATH" ]; then
-            echo "No patch created. This might be because the changes were only in excluded directories."
-            # Set output to current HEAD and exit gracefully
+          # Check if any new patches were created
+          # We can do this by checking if there are any new files to be committed.
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No new patches created."
             CURRENT_SHA=$(git rev-parse HEAD)
             echo "::set-output name=new_commit_sha::$CURRENT_SHA"
             exit 0
           fi
 
-          git add "$FULL_PATCH_PATH"
-          git commit -m "Create patch for PR #${PR_NUMBER}"
+          # Add, commit, and push the new patch files
+          git add patches/*.patch
+          git commit -m "Create patches for PR #${PR_NUMBER}"
           git push origin main
 
           NEW_COMMIT_SHA=$(git rev-parse HEAD)
